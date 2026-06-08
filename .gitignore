@@ -1,0 +1,14 @@
+# Build output
+build/
+
+# Kiro / Claude session data
+.claude/
+
+# macOS
+.DS_Store
+
+# Xcode
+*.xcodeproj
+*.xcworkspace
+.build/
+DerivedData/
