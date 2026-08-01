@@ -36,12 +36,15 @@ systemctl --user stop beast-ytm-control
 systemctl --user start beast-ytm-control
 ```
 
-Default API: `http://0.0.0.0:8787` (`/api/state`, `/api/command`, `/api/load-url`, pair routes).
+Default API listener: all interfaces on port `8787` (`/api/state`, `/api/command`, `/api/load-url`, pair routes). Point the macOS client at the Beast host IP/hostname, not `0.0.0.0`.
+
+Every API route requires `Authorization: Bearer <api_token>`. Install auto-creates `api_token` in `settings.json` if missing.
 
 ## macOS client
 
-Point the menu bar app at the beast host:
-
 ```sh
 export BEAST_REMOTE_URL="http://192.168.1.99:8787"
+export BEAST_REMOTE_TOKEN="$(python3 -c 'import json,pathlib;print(json.load(open(pathlib.Path.home()/".config/beast-ytm-control/settings.json"))["api_token"])')"
 ```
+
+Run the token command on beast (or copy `api_token` from Settings).

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import secrets
 from pathlib import Path
 from typing import Any
 
@@ -15,11 +16,17 @@ DEFAULTS: dict[str, Any] = {
     "state_ttl_seconds": 15.0,
     "companion_min_interval": 5.1,
     "autostart": True,
+    # Shared secret for LAN clients (macOS menu bar BEAST_REMOTE_TOKEN).
+    "api_token": "",
 }
 
 
 def ensure_data_dir() -> None:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
+    try:
+        DATA_DIR.chmod(0o700)
+    except OSError:
+        pass
 
 
 def _normalize(raw: dict[str, Any]) -> dict[str, Any]:
@@ -31,6 +38,7 @@ def _normalize(raw: dict[str, Any]) -> dict[str, Any]:
     cfg["state_ttl_seconds"] = float(cfg["state_ttl_seconds"])
     cfg["companion_min_interval"] = float(cfg["companion_min_interval"])
     cfg["autostart"] = bool(cfg["autostart"])
+    cfg["api_token"] = str(cfg.get("api_token") or "").strip()
     return cfg
 
 
@@ -51,12 +59,25 @@ def save_settings(settings: dict[str, Any]) -> dict[str, Any]:
     ensure_data_dir()
     cfg = _normalize(settings)
     SETTINGS_FILE.write_text(json.dumps(cfg, indent=2, sort_keys=True) + "\n")
+    try:
+        SETTINGS_FILE.chmod(0o600)
+    except OSError:
+        pass
+    return cfg
+
+
+def ensure_api_token(settings: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Guarantee a non-empty api_token and persist it."""
+    cfg = load_settings() if settings is None else _normalize(settings)
+    if not cfg["api_token"]:
+        cfg["api_token"] = secrets.token_urlsafe(32)
+        save_settings(cfg)
     return cfg
 
 
 def apply_runtime_settings(settings: dict[str, Any] | None = None) -> dict[str, Any]:
     """settings.json base, optional explicit dict, then env overrides."""
-    cfg = _normalize(settings) if settings is not None else load_settings()
+    cfg = ensure_api_token(settings)
     if os.environ.get("BEAST_YTM_CONTROL_PORT"):
         cfg["port"] = int(os.environ["BEAST_YTM_CONTROL_PORT"])
     if os.environ.get("BEAST_YTM_COMPANION"):
@@ -67,4 +88,6 @@ def apply_runtime_settings(settings: dict[str, Any] | None = None) -> dict[str, 
         cfg["companion_min_interval"] = float(os.environ["BEAST_YTM_COMPANION_MIN_INTERVAL"])
     if os.environ.get("BEAST_YTM_BIND_HOST"):
         cfg["bind_host"] = os.environ["BEAST_YTM_BIND_HOST"]
+    if os.environ.get("BEAST_YTM_API_TOKEN"):
+        cfg["api_token"] = os.environ["BEAST_YTM_API_TOKEN"].strip()
     return cfg

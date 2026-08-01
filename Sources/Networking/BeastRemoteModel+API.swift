@@ -47,16 +47,16 @@ extension BeastRemoteModel {
     }
 
     func command(_ name: String) async {
-        commandsInFlight += 1
+        let generation = beginCommand()
         applyOptimisticUpdate(for: name)
         do {
             let data = try await post(path: "api/command", body: ["command": name])
-            applyCommandMedia(from: data)
+            applyCommandMedia(from: data, generation: generation)
             statusDetail = "\(name) sent to Beast."
         } catch {
             statusDetail = "Command failed: \(error.localizedDescription)"
         }
-        commandsInFlight -= 1
+        endCommand()
         await refresh()
     }
 
@@ -65,30 +65,30 @@ extension BeastRemoteModel {
             statusDetail = "Seek requires a number."
             return
         }
-        commandsInFlight += 1
+        let generation = beginCommand()
         do {
             let data = try await post(path: "api/command", body: ["command": "seekTo", "data": seconds])
-            applyCommandMedia(from: data)
+            applyCommandMedia(from: data, generation: generation)
             statusDetail = "Seek sent to Beast."
         } catch {
             statusDetail = "Seek failed: \(error.localizedDescription)"
         }
-        commandsInFlight -= 1
+        endCommand()
         await refresh()
     }
 
     func loadURL(_ url: String) async {
         let trimmed = url.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
-        commandsInFlight += 1
+        let generation = beginCommand()
         do {
             let data = try await post(path: "api/load-url", body: ["url": trimmed])
-            applyCommandMedia(from: data)
+            applyCommandMedia(from: data, generation: generation)
             statusDetail = "URL sent to Beast."
         } catch {
             statusDetail = "Load failed: \(error.localizedDescription)"
         }
-        commandsInFlight -= 1
+        endCommand()
         await refresh()
     }
 
@@ -97,18 +97,18 @@ extension BeastRemoteModel {
             statusDetail = "Volume must be 0-100"
             return
         }
-        commandsInFlight += 1
+        let generation = beginCommand()
         if let current = media {
             media = current.withVolume(Double(intValue))
         }
         do {
             let data = try await post(path: "api/command", body: ["command": "setVolume", "data": intValue])
-            applyCommandMedia(from: data)
+            applyCommandMedia(from: data, generation: generation)
             statusDetail = "Volume sent to Beast."
         } catch {
             statusDetail = "Volume failed: \(error.localizedDescription)"
         }
-        commandsInFlight -= 1
+        endCommand()
         await refresh()
     }
 
@@ -127,7 +127,18 @@ extension BeastRemoteModel {
         }
     }
 
-    private func applyCommandMedia(from data: Data) {
+    private func beginCommand() -> Int {
+        commandsInFlight += 1
+        commandGeneration += 1
+        return commandGeneration
+    }
+
+    private func endCommand() {
+        commandsInFlight = max(0, commandsInFlight - 1)
+    }
+
+    private func applyCommandMedia(from data: Data, generation: Int) {
+        guard generation == commandGeneration else { return }
         guard let envelope = try? JSONDecoder().decode(CommandEnvelope.self, from: data),
               let next = envelope.media else { return }
         media = next

@@ -81,7 +81,7 @@ struct BeastMediaSnapshot: Decodable {
     /// feedback before the confirming state refresh lands. `fetchedAt` is reset
     /// so live progress projection keeps tracking from now.
     func togglingPlayState() -> BeastMediaSnapshot {
-        let nowPlaying = !(isPlaying == true)
+        let nowPlaying = !(isPlaying ?? (trackState == 1))
         return copy(trackState: nowPlaying ? 1 : 0, isPlaying: nowPlaying)
     }
 
@@ -90,7 +90,8 @@ struct BeastMediaSnapshot: Decodable {
     }
 
     func withVolume(_ volume: Double) -> BeastMediaSnapshot {
-        copy(muted: false, volume: volume)
+        // Companion setVolume does not unmute; keep mute flag.
+        copy(volume: volume)
     }
 
     var artworkURL: URL? {
