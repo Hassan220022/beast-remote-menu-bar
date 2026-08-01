@@ -31,17 +31,18 @@ chmod 644 "$APPS/beast-ytm-control.desktop"
 # User systemd unit runs API daemon; desktop entry opens tray UI.
 sed "s|ExecStart=.*|ExecStart=$BIN/$APP_ID --daemon|" "$ROOT/beast-ytm-control.service" >"$UNIT_DIR/beast-ytm-control.service"
 
-# Seed settings if missing
-if [[ ! -f "$CONFIG/settings.json" ]]; then
+# Seed/upgrade settings and ensure LAN API bearer token exists
+TOKEN_LINE="$(
   /usr/bin/python3 - <<PY
-from pathlib import Path
-import json, sys
+import sys
 sys.path.insert(0, "$SHARE")
-from beast_ytm_control.settings import DEFAULTS, SETTINGS_FILE, save_settings
-save_settings(DEFAULTS)
-print("wrote", SETTINGS_FILE)
+from beast_ytm_control.settings import SETTINGS_FILE, ensure_api_token
+cfg = ensure_api_token()
+print(cfg.get("api_token") or "")
+print(SETTINGS_FILE, file=sys.stderr)
+print("api_token_len", len(cfg.get("api_token") or ""), file=sys.stderr)
 PY
-fi
+)"
 
 # Stop legacy bare app.py service path if running, then enable new unit
 systemctl --user daemon-reload || true
@@ -64,6 +65,10 @@ echo "  launcher: $BIN/$APP_ID"
 echo "  desktop:  $APPS/beast-ytm-control.desktop"
 echo "  config:   $CONFIG/settings.json"
 echo "  service:  systemctl --user status beast-ytm-control"
+echo
+echo "macOS client auth (required):"
+echo "  export BEAST_REMOTE_URL=\"http://192.168.1.99:8787\""
+echo "  export BEAST_REMOTE_TOKEN=\"$TOKEN_LINE\""
 echo
 echo "Open from app menu, or: $BIN/$APP_ID"
 echo "Daemon only:            $BIN/$APP_ID --daemon"

@@ -30,10 +30,18 @@ APP_ID = "org.mikawi.beast-ytm-control"
 AUTOSTART_DESKTOP = Path.home() / ".config/autostart/beast-ytm-control.desktop"
 
 
+def _api_headers() -> dict[str, str]:
+    token = str(load_settings().get("api_token") or "")
+    headers = {"Content-Type": "application/json"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    return headers
+
+
 class SettingsWindow(Gtk.Window):
     def __init__(self, controller: ServerController, on_saved) -> None:
         super().__init__(title="Beast YTM Control — Settings")
-        self.set_default_size(460, 360)
+        self.set_default_size(460, 400)
         self.set_border_width(12)
         self.controller = controller
         self.on_saved = on_saved
@@ -51,6 +59,9 @@ class SettingsWindow(Gtk.Window):
         self.min_interval = Gtk.SpinButton.new_with_range(0.5, 30, 0.1)
         self.min_interval.set_digits(1)
         self.min_interval.set_value(float(self.cfg["companion_min_interval"]))
+        self.api_token = Gtk.Entry(text=str(self.cfg.get("api_token") or ""))
+        self.api_token.set_visibility(False)
+        self.api_token.set_placeholder_text("LAN bearer token (macOS BEAST_REMOTE_TOKEN)")
         self.autostart = Gtk.CheckButton(label="Start at login (user systemd + desktop autostart)")
         self.autostart.set_active(bool(self.cfg["autostart"]))
 
@@ -60,6 +71,7 @@ class SettingsWindow(Gtk.Window):
             ("Companion base URL", self.companion),
             ("State cache TTL (s)", self.ttl),
             ("Companion min interval (s)", self.min_interval),
+            ("API bearer token", self.api_token),
         ]
         for i, (label, widget) in enumerate(rows):
             grid.attach(Gtk.Label(label=label, xalign=0), 0, i, 1, 1)
@@ -89,6 +101,7 @@ class SettingsWindow(Gtk.Window):
                 "companion_base": self.companion.get_text().strip(),
                 "state_ttl_seconds": float(self.ttl.get_value()),
                 "companion_min_interval": float(self.min_interval.get_value()),
+                "api_token": self.api_token.get_text().strip(),
                 "autostart": self.autostart.get_active(),
             }
         )
@@ -150,7 +163,7 @@ class PairWindow(Gtk.Window):
 
     def _api(self, path: str) -> dict[str, Any]:
         url = f"{self.controller.endpoint}{path}"
-        req = urllib.request.Request(url, data=b"{}", method="POST", headers={"Content-Type": "application/json"})
+        req = urllib.request.Request(url, data=b"{}", method="POST", headers=_api_headers())
         try:
             with urllib.request.urlopen(req, timeout=60) as resp:
                 return json.loads(resp.read().decode())
@@ -280,7 +293,8 @@ class BeastTrayApp:
         def work() -> None:
             token = "yes" if load_token() else "no"
             try:
-                with urllib.request.urlopen(f"{endpoint}/api/state", timeout=2) as resp:
+                req = urllib.request.Request(f"{endpoint}/api/state", headers=_api_headers())
+                with urllib.request.urlopen(req, timeout=2) as resp:
                     data = json.loads(resp.read().decode())
                 media = data.get("media") or {}
                 title = media.get("title") or "Nothing playing"

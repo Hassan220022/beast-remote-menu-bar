@@ -462,9 +462,29 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, format: str, *args: Any) -> None:  # noqa: A003
         return
 
+    def _authorized(self) -> bool:
+        # Empty token = misconfig; refuse rather than open LAN.
+        if not API_TOKEN:
+            return False
+        auth = (self.headers.get("Authorization") or "").strip()
+        if auth == f"Bearer {API_TOKEN}":
+            return True
+        # Accept raw token header used by some local tools.
+        if auth == API_TOKEN:
+            return True
+        return False
+
+    def _require_auth(self) -> bool:
+        if self._authorized():
+            return True
+        self._send(json_response({"error": "unauthorized"}, status=HTTPStatus.UNAUTHORIZED))
+        return False
+
     def do_GET(self) -> None:  # noqa: N802
         if self.path == "/" or self.path.startswith("/?"):
             self._send(text_response(INDEX_HTML, status=HTTPStatus.GONE))
+            return
+        if not self._require_auth():
             return
         if self.path == "/api/state" or self.path.startswith("/api/state?"):
             payload = current_state()
@@ -495,6 +515,9 @@ class Handler(BaseHTTPRequestHandler):
             data = json.loads(raw.decode("utf-8") or "{}")
         except json.JSONDecodeError:
             self._send(json_response({"error": "invalid json"}, status=HTTPStatus.BAD_REQUEST))
+            return
+
+        if not self._require_auth():
             return
 
         if self.path == "/api/command":
@@ -604,15 +627,19 @@ class Handler(BaseHTTPRequestHandler):
         self._send(json_response({"error": "not found"}, status=HTTPStatus.NOT_FOUND))
 
 
+API_TOKEN = ""
+
+
 def apply_settings(settings: dict[str, Any] | None = None) -> dict[str, Any]:
     """Load settings.json (+ env overrides) into module globals used by handlers."""
-    global HOST, PORT, COMPANION_BASE, STATE_CACHE_TTL, COMPANION_MIN_INTERVAL, TOKEN_FILE, CODE_FILE
+    global HOST, PORT, COMPANION_BASE, STATE_CACHE_TTL, COMPANION_MIN_INTERVAL, TOKEN_FILE, CODE_FILE, API_TOKEN
     cfg = apply_runtime_settings(settings)
     HOST = cfg["bind_host"]
     PORT = int(cfg["port"])
     COMPANION_BASE = cfg["companion_base"]
     STATE_CACHE_TTL = float(cfg["state_ttl_seconds"])
     COMPANION_MIN_INTERVAL = float(cfg["companion_min_interval"])
+    API_TOKEN = str(cfg.get("api_token") or "")
     TOKEN_FILE = DATA_DIR / "token.json"
     CODE_FILE = DATA_DIR / "pairing-code.json"
     return cfg
@@ -632,7 +659,8 @@ class ServerController:
 
     @property
     def endpoint(self) -> str:
-        return f"http://{HOST}:{PORT}"
+        host = "127.0.0.1" if HOST in {"0.0.0.0", "::", "[::]"} else HOST
+        return f"http://{host}:{PORT}"
 
     def start(self, settings: dict[str, Any] | None = None) -> str:
         with self._lock:
@@ -645,7 +673,7 @@ class ServerController:
             self._server = server
             self._thread = thread
             thread.start()
-            return f"http://{cfg['bind_host']}:{cfg['port']}"
+            return self.endpoint
 
     def stop(self) -> None:
         with self._lock:
@@ -669,6 +697,7 @@ def main() -> None:
     endpoint = controller.start()
     print(f"Beast Remote listening on {endpoint}")
     print(f"Companion server target: {COMPANION_BASE}")
+    print(f"API auth: Bearer token required (settings api_token, len={len(API_TOKEN)})")
     try:
         while True:
             time.sleep(3600)
