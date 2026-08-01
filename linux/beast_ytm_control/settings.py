@@ -20,6 +20,10 @@ DEFAULTS: dict[str, Any] = {
 
 def ensure_data_dir() -> None:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
+    try:
+        DATA_DIR.chmod(0o700)
+    except OSError:
+        pass
 
 
 def _normalize(raw: dict[str, Any]) -> dict[str, Any]:
@@ -51,6 +55,10 @@ def save_settings(settings: dict[str, Any]) -> dict[str, Any]:
     ensure_data_dir()
     cfg = _normalize(settings)
     SETTINGS_FILE.write_text(json.dumps(cfg, indent=2, sort_keys=True) + "\n")
+    try:
+        SETTINGS_FILE.chmod(0o600)
+    except OSError:
+        pass
     return cfg
 
 

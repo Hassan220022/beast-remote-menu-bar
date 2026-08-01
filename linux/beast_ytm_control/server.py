@@ -274,11 +274,18 @@ def ensure_data_dir() -> None:
 def read_json(path: Path) -> dict[str, Any] | None:
     if not path.exists():
         return None
-    return json.loads(path.read_text())
+    try:
+        return json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return None
 
 
 def write_json(path: Path, payload: dict[str, Any]) -> None:
     path.write_text(json.dumps(payload, indent=2, sort_keys=True))
+    try:
+        path.chmod(0o600)
+    except OSError:
+        pass
 
 
 def load_token() -> str | None:
@@ -306,7 +313,9 @@ def load_pairing_code() -> str | None:
 
 
 COMPANION_LOCK = threading.Lock()
+_COMMAND_SLOTS = threading.BoundedSemaphore(2)  # ponytail: drop burst backlog under companion 5s gate
 _LAST_COMPANION_CALL = 0.0
+MAX_BODY_BYTES = 64 * 1024
 
 
 class CompanionRateLimited(RuntimeError):
@@ -324,27 +333,39 @@ def companion_request(path: str, *, method: str = "GET", body: dict[str, Any] | 
         headers["Authorization"] = token
     data = None if body is None else json.dumps(body).encode("utf-8")
     request = urllib.request.Request(url, data=data, headers=headers, method=method)
-    with COMPANION_LOCK:
-        now = time.monotonic()
-        wait_for = COMPANION_MIN_INTERVAL - (now - _LAST_COMPANION_CALL)
-        if wait_for > 0:
-            if not wait:
-                raise CompanionRateLimited(f"companion cooldown {wait_for:.2f}s")
-            time.sleep(wait_for)
-        try:
-            with urllib.request.urlopen(request, timeout=35) as response:
-                payload = response.read().decode("utf-8")
-                return json.loads(payload) if payload else None
-        except urllib.error.HTTPError as exc:
-            if exc.code == 429:
-                raise CompanionRateLimited(exc.read().decode("utf-8", errors="replace") or "429") from exc
-            raise
-        finally:
-            _LAST_COMPANION_CALL = time.monotonic()
+
+    got_slot = False
+    if wait:
+        got_slot = _COMMAND_SLOTS.acquire(blocking=False)
+        if not got_slot:
+            raise CompanionRateLimited("command queue full")
+    try:
+        with COMPANION_LOCK:
+            now = time.monotonic()
+            wait_for = COMPANION_MIN_INTERVAL - (now - _LAST_COMPANION_CALL)
+            if wait_for > 0:
+                if not wait:
+                    raise CompanionRateLimited(f"companion cooldown {wait_for:.2f}s")
+                time.sleep(wait_for)
+            try:
+                with urllib.request.urlopen(request, timeout=35) as response:
+                    payload = response.read().decode("utf-8")
+                    return json.loads(payload) if payload else None
+            except urllib.error.HTTPError as exc:
+                if exc.code == 429:
+                    raise CompanionRateLimited(exc.read().decode("utf-8", errors="replace") or "429") from exc
+                raise
+            finally:
+                _LAST_COMPANION_CALL = time.monotonic()
+    finally:
+        if got_slot:
+            _COMMAND_SLOTS.release()
 
 
 def companion_public_request(path: str) -> Any:
-    url = f"http://127.0.0.1:9863/{path.lstrip('/')}"
+    parsed = urllib.parse.urlsplit(COMPANION_BASE)
+    origin = f"{parsed.scheme}://{parsed.netloc}" if parsed.scheme and parsed.netloc else "http://127.0.0.1:9863"
+    url = f"{origin.rstrip('/')}/{path.lstrip('/')}"
     request = urllib.request.Request(url, method="GET")
     with urllib.request.urlopen(request, timeout=15) as response:
         payload = response.read().decode("utf-8")
@@ -466,6 +487,9 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:  # noqa: N802
         length = int(self.headers.get("Content-Length", "0") or "0")
+        if length < 0 or length > MAX_BODY_BYTES:
+            self._send(json_response({"error": "body too large"}, status=HTTPStatus.REQUEST_ENTITY_TOO_LARGE))
+            return
         raw = self.rfile.read(length) if length else b"{}"
         try:
             data = json.loads(raw.decode("utf-8") or "{}")
@@ -488,11 +512,18 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 payload = companion_request("/command", method="POST", body=body, token=token, wait=True)
                 media = apply_optimistic_command(str(command), body.get("data"))
-                invalidate_state_cache()
+                if media is None:
+                    invalidate_state_cache()
+                else:
+                    with STATE_CACHE_LOCK:
+                        STATE_CACHE["fetched_at"] = time.monotonic()
+                        STATE_CACHE["error"] = None
                 out: dict[str, Any] = {"ok": True, "result": payload}
                 if media is not None:
                     out["media"] = media
                 self._send(json_response(out))
+            except CompanionRateLimited as exc:
+                self._send(json_response({"error": str(exc)}, status=HTTPStatus.TOO_MANY_REQUESTS))
             except Exception as exc:
                 self._send(json_response({"error": str(exc)}, status=HTTPStatus.BAD_GATEWAY))
             return

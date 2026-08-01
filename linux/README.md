@@ -36,7 +36,7 @@ systemctl --user stop beast-ytm-control
 systemctl --user start beast-ytm-control
 ```
 
-Default API: `http://0.0.0.0:8787` (`/api/state`, `/api/command`, `/api/load-url`, pair routes).
+Default API listener: all interfaces on port `8787` (`/api/state`, `/api/command`, `/api/load-url`, pair routes). Point the macOS client at the Beast host IP/hostname, not `0.0.0.0`.
 
 ## macOS client
 

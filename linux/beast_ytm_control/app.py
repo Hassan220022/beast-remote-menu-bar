@@ -1,23 +1,30 @@
 from __future__ import annotations
 
 import json
-import os
+import shlex
 import subprocess
+import sys
 import threading
 import urllib.error
 import urllib.request
 from pathlib import Path
 from typing import Any
 
-import gi
-
-gi.require_version("Gtk", "3.0")
-gi.require_version("AyatanaAppIndicator3", "0.1")
-from gi.repository import GLib, Gtk  # noqa: E402
-from gi.repository import AyatanaAppIndicator3 as AppIndicator3  # noqa: E402
-
 from .server import ServerController, load_token
-from .settings import DATA_DIR, DEFAULTS, SETTINGS_FILE, load_settings, save_settings
+from .settings import DATA_DIR, SETTINGS_FILE, load_settings, save_settings
+
+try:
+    import gi
+
+    gi.require_version("Gtk", "3.0")
+    gi.require_version("AyatanaAppIndicator3", "0.1")
+    from gi.repository import GLib, Gtk  # noqa: E402
+    from gi.repository import AyatanaAppIndicator3 as AppIndicator3  # noqa: E402
+except (ImportError, ValueError) as _gi_error:  # missing GTK/Ayatana
+    GLib = Gtk = AppIndicator3 = None  # type: ignore[misc, assignment]
+    _GI_IMPORT_ERROR: BaseException | None = _gi_error
+else:
+    _GI_IMPORT_ERROR = None
 
 APP_ID = "org.mikawi.beast-ytm-control"
 AUTOSTART_DESKTOP = Path.home() / ".config/autostart/beast-ytm-control.desktop"
@@ -74,6 +81,7 @@ class SettingsWindow(Gtk.Window):
         grid.attach(buttons, 0, len(rows) + 2, 2, 1)
 
     def _save(self, *_args) -> None:
+        previous = load_settings()
         cfg = save_settings(
             {
                 "bind_host": self.host.get_text().strip(),
@@ -87,6 +95,11 @@ class SettingsWindow(Gtk.Window):
         try:
             self.controller.restart(cfg)
         except OSError as exc:
+            save_settings(previous)
+            try:
+                self.controller.restart(previous)
+            except OSError:
+                pass
             self._error(f"Could not bind API: {exc}")
             return
         set_autostart(cfg["autostart"])
@@ -138,8 +151,17 @@ class PairWindow(Gtk.Window):
     def _api(self, path: str) -> dict[str, Any]:
         url = f"{self.controller.endpoint}{path}"
         req = urllib.request.Request(url, data=b"{}", method="POST", headers={"Content-Type": "application/json"})
-        with urllib.request.urlopen(req, timeout=40) as resp:
-            return json.loads(resp.read().decode())
+        try:
+            with urllib.request.urlopen(req, timeout=60) as resp:
+                return json.loads(resp.read().decode())
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="replace")
+            try:
+                payload = json.loads(detail)
+                detail = str(payload.get("error") or detail)
+            except json.JSONDecodeError:
+                pass
+            raise RuntimeError(f"HTTP {exc.code}: {detail}") from exc
 
     def _start(self) -> None:
         try:
@@ -197,13 +219,14 @@ class BeastTrayApp:
         self.indicator.set_menu(menu)
 
         cfg = load_settings()
-        set_autostart(bool(cfg.get("autostart", True)))
+        # Desktop file only on launch — systemd enable/now is Settings/install only.
+        _write_autostart_desktop(bool(cfg.get("autostart", True)))
         try:
             self.controller.start(cfg)
-        except OSError as exc:
-            self._set_status(f"API failed: {exc}")
-        else:
             self._set_status(f"API on {self.controller.endpoint}")
+        except OSError as exc:
+            # Daemon may already own the port; poll attaches to external API.
+            self._set_status(f"API attach mode ({exc})")
         GLib.timeout_add_seconds(3, self._poll_status)
 
     def _item(self, label: str, cb) -> Gtk.MenuItem:
@@ -251,22 +274,36 @@ class BeastTrayApp:
         subprocess.Popen(["xdg-open", str(DATA_DIR)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
     def _poll_status(self) -> bool:
-        if not self.controller.running:
-            self.track_item.set_label("Track: (API stopped)")
-            return True
-        token = "yes" if load_token() else "no"
-        try:
-            with urllib.request.urlopen(f"{self.controller.endpoint}/api/state", timeout=2) as resp:
-                data = json.loads(resp.read().decode())
-            media = data.get("media") or {}
-            title = media.get("title") or "Nothing playing"
-            artist = media.get("author") or ""
-            playing = "▶" if media.get("isPlaying") else "❚❚"
-            self.track_item.set_label(f"{playing} {title}" + (f" — {artist}" if artist else ""))
-            self._set_status(f"API on {self.controller.endpoint} · paired={token} · ok={data.get('ok')}")
-        except Exception as exc:  # noqa: BLE001
-            self.track_item.set_label("Track: unreachable")
-            self._set_status(f"API on {self.controller.endpoint} · paired={token} · {exc}")
+        endpoint = self.controller.endpoint
+        owned = self.controller.running
+
+        def work() -> None:
+            token = "yes" if load_token() else "no"
+            try:
+                with urllib.request.urlopen(f"{endpoint}/api/state", timeout=2) as resp:
+                    data = json.loads(resp.read().decode())
+                media = data.get("media") or {}
+                title = media.get("title") or "Nothing playing"
+                artist = media.get("author") or ""
+                playing = "▶" if media.get("isPlaying") else "❚❚"
+                track = f"{playing} {title}" + (f" — {artist}" if artist else "")
+                mode = "owned" if owned else "external"
+                status = f"API on {endpoint} · {mode} · paired={token} · ok={data.get('ok')}"
+            except Exception as exc:  # noqa: BLE001
+                if owned:
+                    track = "Track: unreachable"
+                    status = f"API on {endpoint} · paired={token} · {exc}"
+                else:
+                    track = "Track: (API stopped)"
+                    status = f"API stopped · {exc}"
+
+            def apply() -> None:
+                self.track_item.set_label(track)
+                self._set_status(status)
+
+            GLib.idle_add(apply)
+
+        threading.Thread(target=work, daemon=True).start()
         return True
 
     def _quit(self, *_args) -> None:
@@ -275,23 +312,22 @@ class BeastTrayApp:
 
 
 def set_autostart(enabled: bool) -> None:
+    """User toggled Settings → autostart. Sync desktop file + systemd unit."""
+    _write_autostart_desktop(enabled)
     unit = Path.home() / ".config/systemd/user/beast-ytm-control.service"
-    # Keep unit in sync with installed launcher when present.
-    if unit.exists():
-        if enabled:
-            subprocess.run(
-                ["systemctl", "--user", "enable", "--now", "beast-ytm-control.service"],
-                check=False,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
-        else:
-            subprocess.run(
-                ["systemctl", "--user", "disable", "--now", "beast-ytm-control.service"],
-                check=False,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
+    if not unit.exists():
+        return
+    action = ["enable", "--now"] if enabled else ["disable", "--now"]
+    subprocess.run(
+        ["systemctl", "--user", *action, "beast-ytm-control.service"],
+        check=False,
+        timeout=10,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+
+
+def _write_autostart_desktop(enabled: bool) -> None:
     AUTOSTART_DESKTOP.parent.mkdir(parents=True, exist_ok=True)
     if enabled:
         exec_path = _launcher_path()
@@ -316,20 +352,24 @@ def set_autostart(enabled: bool) -> None:
 
 
 def _launcher_path() -> str:
-    # Prefer installed path; fall back to module invocation from this tree.
     candidates = [
         Path.home() / ".local/bin/beast-ytm-control",
         Path("/usr/local/bin/beast-ytm-control"),
     ]
     for path in candidates:
         if path.exists():
-            return str(path)
+            return shlex.quote(str(path))
     root = Path(__file__).resolve().parents[1]
-    return f"/usr/bin/python3 {root / 'run.py'}"
+    return f"{shlex.quote(sys.executable)} {shlex.quote(str(root / 'run.py'))}"
 
 
 def run_app() -> int:
-    # Single-instance-ish: if port already owned by old daemon, still show tray and attach.
-    BeastTrayApp()
+    if _GI_IMPORT_ERROR is not None:
+        raise SystemExit(
+            f"Tray UI needs GTK3 + Ayatana AppIndicator ({_GI_IMPORT_ERROR}). "
+            "Install gir1.2-gtk-3.0 gir1.2-ayatanaappindicator3-0.1, or use --daemon."
+        )
+    app = BeastTrayApp()
     Gtk.main()
+    del app
     return 0

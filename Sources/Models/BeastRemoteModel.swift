@@ -21,6 +21,8 @@ final class BeastRemoteModel: ObservableObject {
     /// optimistic media during the companion's ~5s command window.
     /// Internal so BeastRemoteModel+API can bump it.
     var commandsInFlight = 0
+    /// Monotonic command id so late responses cannot clobber newer media.
+    var commandGeneration = 0
 
     /// Fast cadence while the popover is open.
     static let activePollInterval: UInt64 = 2_000_000_000
