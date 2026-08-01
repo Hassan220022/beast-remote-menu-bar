@@ -16,6 +16,18 @@ final class BeastRemoteModel: ObservableObject {
     let authToken: String?
     let session: URLSession
     private var refreshTask: Task<Void, Never>?
+    private var popoverOpen = false
+    /// >0 while a command round-trip is open. Poll refresh must not overwrite
+    /// optimistic media during the companion's ~5s command window.
+    /// Internal so BeastRemoteModel+API can bump it.
+    var commandsInFlight = 0
+    /// Monotonic command id so late responses cannot clobber newer media.
+    var commandGeneration = 0
+
+    /// Fast cadence while the popover is open.
+    static let activePollInterval: UInt64 = 2_000_000_000
+    /// Slow baseline cadence so state never goes fully stale when closed.
+    static let idlePollInterval: UInt64 = 15_000_000_000
 
     var isConfigured: Bool { baseURL != nil }
     var canSendCommands: Bool { isConfigured && connected }
@@ -43,24 +55,32 @@ final class BeastRemoteModel: ObservableObject {
         refreshTask?.cancel()
     }
 
-    /// Starts (or restarts) the periodic 30s polling loop. Safe to call
-    /// repeatedly: it no-ops while a loop is already running. The loop refreshes
-    /// immediately so the UI is live as soon as the popover opens.
-    func resume() {
+    /// Starts the always-on polling loop. Safe to call repeatedly — no-ops if
+    /// already running. Polls at idle cadence when popover is closed, fast
+    /// cadence when open, so data is never fully stale on reopen.
+    func start() {
         guard refreshTask == nil else { return }
         refreshTask = Task { [weak self] in
             while !Task.isCancelled {
                 guard let self else { return }
                 await self.refresh()
-                try? await Task.sleep(nanoseconds: 30_000_000_000)
+                let interval = self.popoverOpen
+                    ? Self.activePollInterval
+                    : Self.idlePollInterval
+                try? await Task.sleep(nanoseconds: interval)
             }
         }
     }
 
-    /// Cancels the polling loop so we stop hitting the network/battery while the
-    /// popover is closed. `resume()` brings it back.
+    /// Popover opened: switch to fast cadence and force an immediate refresh.
+    func resume() {
+        popoverOpen = true
+        start()
+        Task { await refresh() }
+    }
+
+    /// Popover closed: drop to slow baseline — loop keeps running in background.
     func pause() {
-        refreshTask?.cancel()
-        refreshTask = nil
+        popoverOpen = false
     }
 }

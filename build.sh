@@ -206,14 +206,50 @@ install_app() {
   echo "Open it from Finder/Spotlight/Launchpad, or run: $0 open"
 }
 
+load_dotenv() {
+  # ponytail: KEY=VALUE lines only; no shell expansion.
+  local env_file="$ROOT_DIR/.env"
+  [[ -f "$env_file" ]] || return 0
+  local line key value
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    [[ -z "$line" || "$line" == \#* ]] && continue
+    key="${line%%=*}"
+    value="${line#*=}"
+    key="${key#"${key%%[![:space:]]*}"}"
+    key="${key%"${key##*[![:space:]]}"}"
+    [[ -n "$key" ]] || continue
+    export "$key=$value"
+  done <"$env_file"
+}
+
 open_app() {
   build_app
   remove_legacy_launch_agent
   # Open the freshly built bundle directly (this is the per-session dev path).
   # Use `install` for the persistent /Applications copy.
+  # GUI apps launched via `open` do not inherit shell env — inject from .env.
+  load_dotenv
   xattr -dr com.apple.quarantine "$APP_BUNDLE" >/dev/null 2>&1 || true
-  /usr/bin/open "$APP_BUNDLE"
+  local bin="$APP_BUNDLE/Contents/MacOS/$APP_NAME"
+  if [[ -x "$bin" ]]; then
+    # quit existing first so new env is picked up
+    quit_app >/dev/null 2>&1 || true
+    sleep 0.3
+    env \
+      BEAST_REMOTE_URL="${BEAST_REMOTE_URL:-http://192.168.1.99:8787}" \
+      ${BEAST_REMOTE_TOKEN:+BEAST_REMOTE_TOKEN="$BEAST_REMOTE_TOKEN"} \
+      "$bin" >/dev/null 2>&1 &
+    disown || true
+  else
+    /usr/bin/open "$APP_BUNDLE"
+  fi
   echo "Opened: $APP_BUNDLE"
+  echo "  BEAST_REMOTE_URL=${BEAST_REMOTE_URL:-http://192.168.1.99:8787}"
+  if [[ -n "${BEAST_REMOTE_TOKEN:-}" ]]; then
+    echo "  BEAST_REMOTE_TOKEN=(set, ${#BEAST_REMOTE_TOKEN} chars)"
+  else
+    echo "  BEAST_REMOTE_TOKEN=(unset)"
+  fi
 }
 
 uninstall_app() {

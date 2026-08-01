@@ -12,3 +12,9 @@ build/
 *.xcworkspace
 .build/
 DerivedData/
+
+__pycache__/
+*.py[cod]
+
+# Local secrets / machine config
+.env
