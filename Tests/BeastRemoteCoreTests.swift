@@ -85,9 +85,39 @@ func testValidBaseURL() throws {
     try expectNil(BeastRemoteModel.validBaseURL(from: ""), "rejects empty string")
 }
 
+func testOptimisticSnapshotPatches() throws {
+    let base = BeastMediaSnapshot(
+        title: "T",
+        author: "A",
+        album: nil,
+        artworkUrl: nil,
+        videoId: "v1",
+        playlistId: nil,
+        trackState: 1,
+        isPlaying: true,
+        muted: false,
+        volume: 40,
+        repeatMode: 0,
+        durationSeconds: 100,
+        progressSeconds: 10,
+        fetchedAt: 1,
+        queueIndex: 0,
+        queueLength: 2
+    )
+    let paused = base.togglingPlayState()
+    try expectEqual(paused.isPlaying, false, "toggle pauses")
+    try expectEqual(paused.trackState, 0, "toggle trackState")
+    let muted = base.withMuted(true)
+    try expectEqual(muted.muted, true, "mute")
+    let vol = base.withVolume(12)
+    try expectEqual(vol.volume, 12, "volume")
+    try expectEqual(vol.muted, false, "volume unmutes")
+}
+
 let coreTests: [(String, () throws -> Void)] = [
     ("formatTime", testFormatTime),
     ("parseDuration", testParseDuration),
     ("snapshotFromRemoteState", testSnapshotFromRemoteState),
     ("validBaseURL", testValidBaseURL),
+    ("optimisticSnapshotPatches", testOptimisticSnapshotPatches),
 ]

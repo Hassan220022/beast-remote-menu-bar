@@ -13,6 +13,14 @@ struct StateEnvelope: Decodable {
     let cached: Bool?
 }
 
+/// Command POST response. Server may include an optimistic `media` snapshot so the
+/// UI can update before the next full state poll (companion rate-limits ~5s).
+struct CommandEnvelope: Decodable {
+    let ok: Bool?
+    let media: BeastMediaSnapshot?
+    let error: String?
+}
+
 struct RemoteState: Decodable {
     let player: RemotePlayer?
     let video: RemoteVideoDetails?

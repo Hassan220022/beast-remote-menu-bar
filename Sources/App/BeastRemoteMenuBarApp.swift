@@ -11,11 +11,11 @@ struct BeastRemoteMenuBarApp: App {
     init() {
         let model = BeastRemoteModel()
         _model = StateObject(wrappedValue: model)
-        // One-shot sync at launch so the menu bar icon reflects reality without
-        // keeping the full polling loop alive in the background. The periodic
-        // loop only runs while the popover is open (see BeastMenuView).
+        // Start the always-on polling loop so state is never fully stale on
+        // reopen. The loop runs at idle cadence (15s) when the popover is
+        // closed and switches to fast cadence (2s) while it's open.
         Task { @MainActor in
-            await model.refresh()
+            model.start()
         }
     }
 

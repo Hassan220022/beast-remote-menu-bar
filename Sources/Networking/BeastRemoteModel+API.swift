@@ -15,6 +15,11 @@ extension BeastRemoteModel {
                 } else {
                     connectionText = "Connected to Beast"
                 }
+                // Root cause of "UI stuck until close": 2s poll overwrites optimistic
+                // media while a command is still waiting on the companion (~5s).
+                if commandsInFlight > 0 {
+                    return
+                }
                 if let warning = snapshot.warning {
                     statusDetail = "Showing cached media: \(warning)"
                 } else if let error = snapshot.error {
@@ -27,23 +32,32 @@ extension BeastRemoteModel {
                 connected = false
                 connectionText = "Disconnected"
                 statusDetail = snapshot.error ?? "Unknown error"
-                media = nil
+                if commandsInFlight == 0 {
+                    media = nil
+                }
             }
         } catch {
             connected = false
             connectionText = "Disconnected: \(error.localizedDescription)"
             statusDetail = error.localizedDescription
-            media = nil
+            if commandsInFlight == 0 {
+                media = nil
+            }
         }
     }
 
     func command(_ name: String) async {
+        commandsInFlight += 1
+        applyOptimisticUpdate(for: name)
         do {
-            _ = try await post(path: "api/command", body: ["command": name])
+            let data = try await post(path: "api/command", body: ["command": name])
+            applyCommandMedia(from: data)
             statusDetail = "\(name) sent to Beast."
         } catch {
             statusDetail = "Command failed: \(error.localizedDescription)"
         }
+        commandsInFlight -= 1
+        await refresh()
     }
 
     func seek(to seconds: Double) async {
@@ -51,23 +65,31 @@ extension BeastRemoteModel {
             statusDetail = "Seek requires a number."
             return
         }
+        commandsInFlight += 1
         do {
-            _ = try await post(path: "api/command", body: ["command": "seekTo", "data": seconds])
+            let data = try await post(path: "api/command", body: ["command": "seekTo", "data": seconds])
+            applyCommandMedia(from: data)
             statusDetail = "Seek sent to Beast."
         } catch {
             statusDetail = "Seek failed: \(error.localizedDescription)"
         }
+        commandsInFlight -= 1
+        await refresh()
     }
 
     func loadURL(_ url: String) async {
         let trimmed = url.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
+        commandsInFlight += 1
         do {
-            _ = try await post(path: "api/load-url", body: ["url": trimmed])
+            let data = try await post(path: "api/load-url", body: ["url": trimmed])
+            applyCommandMedia(from: data)
             statusDetail = "URL sent to Beast."
         } catch {
             statusDetail = "Load failed: \(error.localizedDescription)"
         }
+        commandsInFlight -= 1
+        await refresh()
     }
 
     func setVolume(_ value: String) async {
@@ -75,12 +97,40 @@ extension BeastRemoteModel {
             statusDetail = "Volume must be 0-100"
             return
         }
+        commandsInFlight += 1
+        if let current = media {
+            media = current.withVolume(Double(intValue))
+        }
         do {
-            _ = try await post(path: "api/command", body: ["command": "setVolume", "data": intValue])
+            let data = try await post(path: "api/command", body: ["command": "setVolume", "data": intValue])
+            applyCommandMedia(from: data)
             statusDetail = "Volume sent to Beast."
         } catch {
             statusDetail = "Volume failed: \(error.localizedDescription)"
         }
+        commandsInFlight -= 1
+        await refresh()
+    }
+
+    /// Instant local UI for commands we can project without queue data.
+    private func applyOptimisticUpdate(for command: String) {
+        guard let current = media else { return }
+        switch command {
+        case "playPause":
+            media = current.togglingPlayState()
+        case "mute":
+            media = current.withMuted(true)
+        case "unmute":
+            media = current.withMuted(false)
+        default:
+            break
+        }
+    }
+
+    private func applyCommandMedia(from data: Data) {
+        guard let envelope = try? JSONDecoder().decode(CommandEnvelope.self, from: data),
+              let next = envelope.media else { return }
+        media = next
     }
 
     private func getState() async throws -> StateEnvelope {

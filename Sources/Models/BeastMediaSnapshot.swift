@@ -44,6 +44,55 @@ struct BeastMediaSnapshot: Decodable {
         [videoId, title, author].compactMap { $0 }.joined(separator: "|")
     }
 
+    /// Shared copy helper for optimistic UI patches.
+    private func copy(
+        trackState: Int? = nil,
+        isPlaying: Bool? = nil,
+        muted: Bool? = nil,
+        volume: Double? = nil,
+        progressSeconds: Double? = nil,
+        title: String? = nil,
+        author: String? = nil,
+        artworkUrl: String? = nil,
+        videoId: String? = nil,
+        queueIndex: Int? = nil
+    ) -> BeastMediaSnapshot {
+        BeastMediaSnapshot(
+            title: title ?? self.title,
+            author: author ?? self.author,
+            album: album,
+            artworkUrl: artworkUrl ?? self.artworkUrl,
+            videoId: videoId ?? self.videoId,
+            playlistId: playlistId,
+            trackState: trackState ?? self.trackState,
+            isPlaying: isPlaying ?? self.isPlaying,
+            muted: muted ?? self.muted,
+            volume: volume ?? self.volume,
+            repeatMode: repeatMode,
+            durationSeconds: durationSeconds,
+            progressSeconds: progressSeconds ?? self.progressSeconds,
+            fetchedAt: Date().timeIntervalSince1970,
+            queueIndex: queueIndex ?? self.queueIndex,
+            queueLength: queueLength
+        )
+    }
+
+    /// Returns a copy with the play/pause state flipped, used for optimistic UI
+    /// feedback before the confirming state refresh lands. `fetchedAt` is reset
+    /// so live progress projection keeps tracking from now.
+    func togglingPlayState() -> BeastMediaSnapshot {
+        let nowPlaying = !(isPlaying == true)
+        return copy(trackState: nowPlaying ? 1 : 0, isPlaying: nowPlaying)
+    }
+
+    func withMuted(_ muted: Bool) -> BeastMediaSnapshot {
+        copy(muted: muted)
+    }
+
+    func withVolume(_ volume: Double) -> BeastMediaSnapshot {
+        copy(muted: false, volume: volume)
+    }
+
     var artworkURL: URL? {
         guard let artworkUrl else { return nil }
         return URL(string: artworkUrl)
