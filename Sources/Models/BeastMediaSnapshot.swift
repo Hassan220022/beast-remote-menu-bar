@@ -14,6 +14,8 @@ struct BeastMediaSnapshot: Decodable {
     let isPlaying: Bool?
     let muted: Bool?
     let volume: Double?
+    let systemVolume: Double?
+    let systemMuted: Bool?
     let repeatMode: Int?
     let durationSeconds: Double?
     let progressSeconds: Double?
@@ -32,6 +34,8 @@ struct BeastMediaSnapshot: Decodable {
         case isPlaying
         case muted
         case volume
+        case systemVolume
+        case systemMuted
         case repeatMode
         case durationSeconds
         case progressSeconds
@@ -50,6 +54,8 @@ struct BeastMediaSnapshot: Decodable {
         isPlaying: Bool? = nil,
         muted: Bool? = nil,
         volume: Double? = nil,
+        systemVolume: Double? = nil,
+        systemMuted: Bool? = nil,
         progressSeconds: Double? = nil,
         title: String? = nil,
         author: String? = nil,
@@ -68,6 +74,8 @@ struct BeastMediaSnapshot: Decodable {
             isPlaying: isPlaying ?? self.isPlaying,
             muted: muted ?? self.muted,
             volume: volume ?? self.volume,
+            systemVolume: systemVolume ?? self.systemVolume,
+            systemMuted: systemMuted ?? self.systemMuted,
             repeatMode: repeatMode,
             durationSeconds: durationSeconds,
             progressSeconds: progressSeconds ?? self.progressSeconds,
@@ -92,6 +100,14 @@ struct BeastMediaSnapshot: Decodable {
     func withVolume(_ volume: Double) -> BeastMediaSnapshot {
         // Companion setVolume does not unmute; keep mute flag.
         copy(volume: volume)
+    }
+
+    func withSystemVolume(_ systemVolume: Double) -> BeastMediaSnapshot {
+        copy(systemVolume: systemVolume, systemMuted: false)
+    }
+
+    func withSystemMuted(_ systemMuted: Bool) -> BeastMediaSnapshot {
+        copy(systemMuted: systemMuted)
     }
 
     var artworkURL: URL? {
@@ -170,6 +186,8 @@ struct BeastMediaSnapshot: Decodable {
             isPlaying: player?.trackState == 1,
             muted: player?.muted,
             volume: player?.volume,
+            systemVolume: nil,
+            systemMuted: nil,
             repeatMode: queue?.repeatMode,
             durationSeconds: durationSeconds,
             progressSeconds: progressSeconds,

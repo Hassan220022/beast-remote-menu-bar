@@ -27,7 +27,10 @@ extension BeastRemoteModel {
                 } else {
                     statusDetail = "Live media synced from the Beast."
                 }
-                media = snapshot.media ?? BeastMediaSnapshot.from(state: snapshot.state)
+                let next = snapshot.media ?? BeastMediaSnapshot.from(state: snapshot.state)
+                systemVolume = next?.systemVolume
+                systemMuted = next?.systemMuted
+                media = next
             } else {
                 connected = false
                 connectionText = "Disconnected"
@@ -112,6 +115,41 @@ extension BeastRemoteModel {
         await refresh()
     }
 
+    func setSystemVolume(_ value: String) async {
+        guard let intValue = Int(value.trimmingCharacters(in: .whitespacesAndNewlines)), (0...100).contains(intValue) else {
+            statusDetail = "System volume must be 0-100"
+            return
+        }
+        if let current = media {
+            media = current.withSystemVolume(Double(intValue))
+        }
+        systemVolume = Double(intValue)
+        do {
+            let body = try JSONSerialization.data(withJSONObject: ["volume": intValue])
+            _ = try await postRaw(path: "api/system-volume", body: body)
+            statusDetail = "System volume sent to Beast."
+        } catch {
+            statusDetail = "System volume failed: \(error.localizedDescription)"
+        }
+        await refresh()
+    }
+
+    func toggleSystemMute() async {
+        let target = !(systemMuted == true)
+        if let current = media {
+            media = current.withSystemMuted(target)
+        }
+        systemMuted = target
+        do {
+            let body = try JSONSerialization.data(withJSONObject: ["muted": target])
+            _ = try await postRaw(path: "api/system-mute", body: body)
+            statusDetail = target ? "Beast muted." : "Beast unmuted."
+        } catch {
+            statusDetail = "System mute failed: \(error.localizedDescription)"
+        }
+        await refresh()
+    }
+
     /// Instant local UI for commands we can project without queue data.
     private func applyOptimisticUpdate(for command: String) {
         guard let current = media else { return }
@@ -152,10 +190,14 @@ extension BeastRemoteModel {
     }
 
     private func post(path: String, body: [String: Any]) async throws -> Data {
+        try await postRaw(path: path, body: try JSONSerialization.data(withJSONObject: body, options: []))
+    }
+
+    private func postRaw(path: String, body: Data) async throws -> Data {
         var request = try makeRequest(path: path)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try JSONSerialization.data(withJSONObject: body, options: [])
+        request.httpBody = body
         let (data, response) = try await session.data(for: request)
         try validate(response: response)
         return data

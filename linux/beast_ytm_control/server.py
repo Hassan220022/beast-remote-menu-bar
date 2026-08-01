@@ -4,6 +4,8 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
+import subprocess
 import threading
 import time
 import urllib.error
@@ -151,6 +153,8 @@ def build_media_snapshot(state: dict[str, Any], *, fetched_at: float | None = No
     if isinstance(automix_items, list):
         queue_length += len(automix_items)
 
+    sys_vol = system_volume()
+
     return {
         "title": title,
         "author": author,
@@ -162,6 +166,8 @@ def build_media_snapshot(state: dict[str, Any], *, fetched_at: float | None = No
         "isPlaying": is_playing,
         "muted": muted,
         "volume": volume,
+        "systemVolume": sys_vol["volume"],
+        "systemMuted": sys_vol["muted"],
         "repeatMode": repeat_mode,
         "durationSeconds": duration_seconds,
         "progressSeconds": progress_seconds,
@@ -316,6 +322,90 @@ COMPANION_LOCK = threading.Lock()
 _COMMAND_SLOTS = threading.BoundedSemaphore(2)  # ponytail: drop burst backlog under companion 5s gate
 _LAST_COMPANION_CALL = 0.0
 MAX_BODY_BYTES = 64 * 1024
+
+SYSTEM_VOLUME_LOCK = threading.Lock()
+_SYSTEM_VOLUME_CACHE: dict[str, Any] = {"at": 0.0, "volume": None, "muted": None}
+SYSTEM_VOLUME_TTL = float(os.environ.get("BEAST_YTM_SYSTEM_VOLUME_TTL", "2"))
+_WPCTL = shutil.which("wpctl") or "wpctl"
+
+
+def _read_system_volume() -> tuple[float | None, bool | None]:
+    """Beast default audio sink volume/mute via wpctl. None if unavailable."""
+    try:
+        out = subprocess.check_output(
+            [_WPCTL, "get-volume", "@DEFAULT_AUDIO_SINK@"],
+            stderr=subprocess.DEVNULL,
+            timeout=2,
+            text=True,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None, None
+    volume = None
+    muted = None
+    m = re.search(r"Volume:\s*([0-9.]+)", out)
+    if m:
+        try:
+            volume = round(float(m.group(1)) * 100.0)
+        except ValueError:
+            pass
+    if "MUTED" in out:
+        muted = True
+    elif "Volume:" in out:
+        muted = False
+    return volume, muted
+
+
+def system_volume() -> dict[str, Any]:
+    """Cached Beast system sink volume + mute. Independent of YTM companion rate limit."""
+    now = time.monotonic()
+    with SYSTEM_VOLUME_LOCK:
+        age = now - _SYSTEM_VOLUME_CACHE["at"]
+        if age < SYSTEM_VOLUME_TTL and _SYSTEM_VOLUME_CACHE["volume"] is not None:
+            return {
+                "volume": _SYSTEM_VOLUME_CACHE["volume"],
+                "muted": _SYSTEM_VOLUME_CACHE["muted"],
+            }
+    volume, muted = _read_system_volume()
+    with SYSTEM_VOLUME_LOCK:
+        _SYSTEM_VOLUME_CACHE["at"] = now
+        _SYSTEM_VOLUME_CACHE["volume"] = volume
+        _SYSTEM_VOLUME_CACHE["muted"] = muted
+    return {"volume": volume, "muted": muted}
+
+
+def set_system_volume(value: int) -> dict[str, Any]:
+    clamped = max(0, min(100, int(value)))
+    level = clamped / 100.0
+    try:
+        subprocess.check_output(
+            [_WPCTL, "set-volume", "@DEFAULT_AUDIO_SINK@", f"{level:.3f}"],
+            stderr=subprocess.DEVNULL,
+            timeout=2,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        return {"ok": False, "error": str(exc)}
+    with SYSTEM_VOLUME_LOCK:
+        _SYSTEM_VOLUME_CACHE["at"] = time.monotonic()
+        _SYSTEM_VOLUME_CACHE["volume"] = float(clamped)
+        muted = _SYSTEM_VOLUME_CACHE["muted"]
+    return {"ok": True, "volume": clamped, "muted": muted}
+
+
+def set_system_mute(muted: bool) -> dict[str, Any]:
+    state = "1" if muted else "0"
+    try:
+        subprocess.check_output(
+            [_WPCTL, "set-mute", "@DEFAULT_AUDIO_SINK@", state],
+            stderr=subprocess.DEVNULL,
+            timeout=2,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        return {"ok": False, "error": str(exc)}
+    with SYSTEM_VOLUME_LOCK:
+        _SYSTEM_VOLUME_CACHE["at"] = time.monotonic()
+        _SYSTEM_VOLUME_CACHE["muted"] = bool(muted)
+        volume = _SYSTEM_VOLUME_CACHE["volume"]
+    return {"ok": True, "volume": volume, "muted": bool(muted)}
 
 
 class CompanionRateLimited(RuntimeError):
@@ -582,6 +672,22 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(json_response({"ok": True, "message": "URL sent to Beast", "result": payload}))
             except Exception as exc:
                 self._send(json_response({"error": str(exc)}, status=HTTPStatus.BAD_GATEWAY))
+            return
+
+        if self.path == "/api/system-volume":
+            raw_vol = data.get("volume")
+            try:
+                value = int(raw_vol)
+            except (TypeError, ValueError):
+                self._send(json_response({"error": "volume must be 0-100"}, status=HTTPStatus.BAD_REQUEST))
+                return
+            result = set_system_volume(value)
+            self._send(json_response(result, status=HTTPStatus.OK if result.get("ok") else HTTPStatus.BAD_GATEWAY))
+            return
+
+        if self.path == "/api/system-mute":
+            result = set_system_mute(bool(data.get("muted")))
+            self._send(json_response(result, status=HTTPStatus.OK if result.get("ok") else HTTPStatus.BAD_GATEWAY))
             return
 
         if self.path == "/api/pair/start":

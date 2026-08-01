@@ -97,6 +97,8 @@ func testOptimisticSnapshotPatches() throws {
         isPlaying: true,
         muted: false,
         volume: 40,
+        systemVolume: 50,
+        systemMuted: false,
         repeatMode: 0,
         durationSeconds: 100,
         progressSeconds: 10,
@@ -114,9 +116,15 @@ func testOptimisticSnapshotPatches() throws {
     try expectEqual(vol.muted, false, "volume keeps mute flag")
     let mutedBase = base.withMuted(true).withVolume(12)
     try expectEqual(mutedBase.muted, true, "setVolume does not unmute")
+    let sysVol = base.withSystemVolume(77)
+    try expectEqual(sysVol.systemVolume, 77, "system volume")
+    try expectEqual(sysVol.systemMuted, false, "system volume unmutes")
+    let sysMuted = base.withSystemMuted(true)
+    try expectEqual(sysMuted.systemMuted, true, "system mute")
     let fromTrack = BeastMediaSnapshot(
         title: "T", author: "A", album: nil, artworkUrl: nil, videoId: "v1", playlistId: nil,
-        trackState: 1, isPlaying: nil, muted: false, volume: 1, repeatMode: 0,
+        trackState: 1, isPlaying: nil, muted: false, volume: 1, systemVolume: nil, systemMuted: nil,
+        repeatMode: 0,
         durationSeconds: 1, progressSeconds: 0, fetchedAt: 1, queueIndex: 0, queueLength: 1
     ).togglingPlayState()
     try expectEqual(fromTrack.isPlaying, false, "toggle uses trackState when isPlaying nil")

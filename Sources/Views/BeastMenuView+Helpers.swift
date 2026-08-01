@@ -21,6 +21,16 @@ extension BeastMenuView {
         }
     }
 
+    func syncSystemVolumeDraft() {
+        if let volume = model.systemVolume {
+            systemVolumeDraft = volume
+        } else if let volume = model.media?.systemVolume {
+            systemVolumeDraft = volume
+        } else {
+            systemVolumeDraft = 0
+        }
+    }
+
     func syncSeekDraft() {
         seekDraft = progress(for: model.media)
     }

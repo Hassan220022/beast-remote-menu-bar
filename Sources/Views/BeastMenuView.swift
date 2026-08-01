@@ -11,6 +11,8 @@ struct BeastMenuView: View {
     @State var urlDraft = ""
     @State var volumeDraft = 0.0
     @State var isAdjustingVolume = false
+    @State var systemVolumeDraft = 0.0
+    @State var isAdjustingSystemVolume = false
     @State var playPressed = false
 
     let panelWidth: CGFloat = 360
@@ -27,6 +29,7 @@ struct BeastMenuView: View {
                         seekSection(for: media)
                         transportSection
                         volumeSection(for: media)
+                        systemVolumeSection
                         secondaryControls
                     } else {
                         emptyStateCard
@@ -48,6 +51,7 @@ struct BeastMenuView: View {
         .onAppear {
             syncSeekDraft()
             syncVolumeDraft()
+            syncSystemVolumeDraft()
             // Popover opened: start live polling so transport state stays fresh.
             model.resume()
         }
@@ -61,6 +65,9 @@ struct BeastMenuView: View {
             }
             if !isAdjustingVolume {
                 syncVolumeDraft()
+            }
+            if !isAdjustingSystemVolume {
+                syncSystemVolumeDraft()
             }
         }
     }

@@ -10,6 +10,8 @@ final class BeastRemoteModel: ObservableObject {
     @Published var connectionText = "Checking Beast..."
     @Published var statusDetail = "Waiting for the first sync."
     @Published var media: BeastMediaSnapshot?
+    @Published var systemVolume: Double?
+    @Published var systemMuted: Bool?
 
     let rawBaseURL: String
     let baseURL: URL?
