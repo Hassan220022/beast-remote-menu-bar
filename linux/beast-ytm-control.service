@@ -1,0 +1,14 @@
+[Unit]
+Description=Beast YTM Control API
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/beast-ytm-control --daemon
+Restart=on-failure
+RestartSec=2
+Environment=BEAST_YTM_CONTROL_DATA=%h/.config/beast-ytm-control
+
+[Install]
+WantedBy=default.target

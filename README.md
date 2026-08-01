@@ -52,3 +52,19 @@ Useful commands:
 `Info.plist` allows local-network HTTP through `NSAllowsLocalNetworking` because the Beast controller is expected to live on a LAN address such as `192.168.x.x`. It does not enable broad arbitrary network loads.
 
 The app sends commands only to the configured `BEAST_REMOTE_URL`. It validates the base URL scheme/host before enabling controls and uses short URLSession timeouts so an offline Beast does not hang the menu.
+
+## Linux controller (Beast host)
+
+The beast-side bridge is a real app under [`linux/`](linux/), not a one-off script:
+
+- GTK tray UI (open/close, Start/Stop API, Settings, Pair)
+- `~/.config/beast-ytm-control/settings.json`
+- Desktop entry + user systemd unit
+
+```sh
+cd linux && ./install.sh
+beast-ytm-control            # tray
+beast-ytm-control --daemon   # API only
+```
+
+Details: [`linux/README.md`](linux/README.md).

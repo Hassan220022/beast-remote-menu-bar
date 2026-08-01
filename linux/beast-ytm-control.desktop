@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Beast YTM Control
+GenericName=YouTube Music Remote Bridge
+Comment=Local API bridge for the Beast Remote macOS menu bar app
+Exec=beast-ytm-control
+Icon=audio-x-generic
+Terminal=false
+Categories=AudioVideo;Audio;Network;
+StartupNotify=false
+X-GNOME-Autostart-enabled=true
